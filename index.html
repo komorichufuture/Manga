@@ -656,6 +656,7 @@ const ictx = imageCanvas.getContext('2d');
 const dctx = drawCanvas.getContext('2d');
 const pctx = panelCanvas.getContext('2d');
 const canvasWrap = document.getElementById('canvas-wrap');
+const PANEL_DRAW_CURSOR = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M14 1v8M14 19v8M1 14h8M19 14h8' stroke='%23ff4d4f' stroke-width='2.4' stroke-linecap='round'/><path d='M14 3v6M14 19v6M3 14h6M19 14h6' stroke='%23ffffff' stroke-width='1' stroke-linecap='round' opacity='0.95'/><circle cx='14' cy='14' r='3.2' fill='%23ffd54f' stroke='%23000000' stroke-width='1'/></svg>") 14 14, crosshair`;
 
 function getScale() { return BASE_SCALE * zoom; }
 function mm(v) { return v * getScale(); }
@@ -1724,7 +1725,7 @@ panelCanvas.addEventListener('mousemove', e => {
   if (currentTool === 'panel' && !isDrawing) {
     const hit = hitHandle(pos);
     const edgeHit = hit ? null : hitPanelEdge(pos);
-    panelCanvas.style.cursor = (hit || edgeHit) ? 'move' : 'crosshair';
+    panelCanvas.style.cursor = (hit || edgeHit) ? 'move' : PANEL_DRAW_CURSOR;
   }
 
   if (!isDrawing) return;
@@ -1851,7 +1852,7 @@ function setActiveTool(tool) {
     selectedTextIndex = -1;
     textDragStart = null;
   }
-  panelCanvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'image' ? 'default' : tool === 'text' ? 'text' : 'crosshair';
+  panelCanvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'image' ? 'default' : tool === 'text' ? 'text' : tool === 'panel' ? PANEL_DRAW_CURSOR : 'crosshair';
   updateSelectionStatus();
   drawPlacedImages();
   drawPanels();
