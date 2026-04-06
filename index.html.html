@@ -233,7 +233,8 @@ body {
   gap: 3px;
 }
 .info-row label { font-size: 10px; color: var(--text-dim); }
-.info-row input {
+.info-row input,
+.info-row textarea {
   background: var(--btn);
   border: 1px solid var(--border);
   color: var(--text);
@@ -242,7 +243,13 @@ body {
   font-size: 11px;
   width: 100%;
 }
-.info-row input:focus { outline: none; border-color: var(--accent); }
+.info-row textarea {
+  resize: vertical;
+  min-height: 74px;
+  line-height: 1.5;
+}
+.info-row input:focus,
+.info-row textarea:focus { outline: none; border-color: var(--accent); }
 
 .legend-row {
   display: flex;
@@ -410,6 +417,15 @@ body {
       画像
     </button>
 
+    <button class="tool-btn" id="tool-text" title="文字">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M5 6h14"/>
+        <path d="M12 6v12"/>
+        <path d="M8 18h8"/>
+      </svg>
+      文字
+    </button>
+
     <button class="tool-btn" id="tool-line" title="直線">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
         <line x1="5" y1="19" x2="19" y2="5"/>
@@ -517,6 +533,26 @@ body {
     </div>
 
     <div>
+      <div class="rpanel-title">文字</div>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+        <div class="info-row">
+          <label>テキスト内容</label>
+          <textarea id="text-content" placeholder="縦書きなら改行で列分けもできます">セリフ</textarea>
+        </div>
+        <div class="info-row">
+          <label>文字サイズ (px)</label>
+          <input type="number" id="text-size" value="28" min="8" max="200">
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text); cursor:pointer;">
+          <input type="checkbox" id="text-vertical" checked>
+          縦書きで配置する
+        </label>
+        <button class="btn" id="btn-text-apply">選択中文字を更新</button>
+        <div style="font-size:10px; color:var(--text-dim); line-height:1.5;">文字ツールを選び、余白をクリックすると文字を配置。文字をクリックすると移動できます。</div>
+      </div>
+    </div>
+
+    <div>
       <div class="rpanel-title">凡例</div>
       <div style="display:flex; flex-direction:column; gap:5px; margin-top:8px;">
         <div class="legend-row">
@@ -554,6 +590,7 @@ body {
   <span>サイズ: <b id="st-size">2px</b></span>
   <span>元に戻す: <b id="st-history">0</b>ステップ</span>
   <span>ショートカット: <b>R</b>=直角補正</span>
+  <span>文字: <b>文字ツール</b>でクリック配置</span>
   <span id="st-sel" style="color:var(--accent);"></span>
 </div>
 
@@ -647,6 +684,11 @@ function resizeCanvases() {
       item.y *= ratio;
       item.w *= ratio;
       item.h *= ratio;
+    });
+    placedTexts.forEach(item => {
+      item.x *= ratio;
+      item.y *= ratio;
+      item.fontSize *= ratio;
     });
   }
 
@@ -829,6 +871,10 @@ let imageResizeHandle = null;
 let imageDragStart = null;
 const imageCache = new Map();
 
+let placedTexts = []; // {text, x, y, fontSize, vertical, color}
+let selectedTextIndex = -1;
+let textDragStart = null;
+
 const cropModal = document.getElementById('image-crop-modal');
 const cropCanvas = document.getElementById('crop-canvas');
 const cropCtx = cropCanvas.getContext('2d');
@@ -875,6 +921,121 @@ function drawImageSelection(ctx, item) {
   ctx.restore();
 }
 
+function normalizeTextContent(value) {
+  return (value || '').replace(/\r\n?/g, '\n');
+}
+
+function getTextLines(value) {
+  const text = normalizeTextContent(value);
+  return text.length ? text.split('\n') : [''];
+}
+
+function getTextFont(item) {
+  return `${item.fontSize}px "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif`;
+}
+
+function getTextBounds(item, ctx = ictx) {
+  const lines = getTextLines(item.text);
+  const fontSize = Math.max(8, item.fontSize || 28);
+  const lineGap = fontSize * 0.25;
+  const lineHeight = fontSize + lineGap;
+  if (item.vertical) {
+    const colGap = fontSize * 0.35;
+    const columns = Math.max(1, lines.length);
+    const longest = Math.max(1, ...lines.map(line => Math.max(1, Array.from(line || ' ').length)));
+    const width = columns * fontSize + Math.max(0, columns - 1) * colGap;
+    const height = longest * lineHeight - lineGap;
+    return { x: item.x, y: item.y, w: width, h: height, lineHeight, colGap };
+  }
+  ctx.save();
+  ctx.font = getTextFont({ fontSize });
+  const width = Math.max(fontSize, ...lines.map(line => ctx.measureText(line || ' ').width));
+  ctx.restore();
+  const height = Math.max(fontSize, lines.length * lineHeight - lineGap);
+  return { x: item.x, y: item.y, w: width, h: height, lineHeight, colGap: 0 };
+}
+
+function drawTextSelection(ctx, item) {
+  const bounds = getTextBounds(item, ctx);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(91,156,255,0.95)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 4]);
+  ctx.strokeRect(bounds.x - 4, bounds.y - 4, bounds.w + 8, bounds.h + 8);
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawTextItem(ctx, item, selected) {
+  const lines = getTextLines(item.text);
+  const fontSize = Math.max(8, item.fontSize || 28);
+  const lineGap = fontSize * 0.25;
+  const lineHeight = fontSize + lineGap;
+  ctx.save();
+  ctx.font = getTextFont({ fontSize });
+  ctx.fillStyle = item.color || '#000000';
+  ctx.textBaseline = 'top';
+  if (item.vertical) {
+    const colGap = fontSize * 0.35;
+    const columns = Math.max(1, lines.length);
+    lines.forEach((line, lineIdx) => {
+      const chars = Array.from((line && line.length) ? line : ' ');
+      const x = item.x + (columns - 1 - lineIdx) * (fontSize + colGap);
+      chars.forEach((ch, idx) => {
+        ctx.fillText(ch, x, item.y + idx * lineHeight);
+      });
+    });
+  } else {
+    lines.forEach((line, lineIdx) => {
+      ctx.fillText((line && line.length) ? line : ' ', item.x, item.y + lineIdx * lineHeight);
+    });
+  }
+  if (selected) drawTextSelection(ctx, item);
+  ctx.restore();
+}
+
+function hitPlacedText(pos) {
+  for (let i = placedTexts.length - 1; i >= 0; i--) {
+    const bounds = getTextBounds(placedTexts[i]);
+    if (pos.x >= bounds.x - 4 && pos.x <= bounds.x + bounds.w + 4 && pos.y >= bounds.y - 4 && pos.y <= bounds.y + bounds.h + 4) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function syncTextControlsFromSelection() {
+  if (selectedTextIndex < 0 || !placedTexts[selectedTextIndex]) return;
+  const item = placedTexts[selectedTextIndex];
+  document.getElementById('text-content').value = item.text;
+  document.getElementById('text-size').value = Math.round(item.fontSize);
+  document.getElementById('text-vertical').checked = !!item.vertical;
+}
+
+function getTextFormValues() {
+  const raw = document.getElementById('text-content').value;
+  return {
+    text: raw,
+    fontSize: Math.max(8, parseInt(document.getElementById('text-size').value || '28', 10) || 28),
+    vertical: document.getElementById('text-vertical').checked,
+    color: strokeColor,
+  };
+}
+
+function applyTextFormToSelection() {
+  if (selectedTextIndex < 0 || !placedTexts[selectedTextIndex]) return false;
+  const item = placedTexts[selectedTextIndex];
+  const vals = getTextFormValues();
+  item.text = vals.text;
+  item.fontSize = vals.fontSize;
+  item.vertical = vals.vertical;
+  item.color = vals.color;
+  drawPlacedImages();
+  updateSelectionStatus();
+  saveHistory();
+  return true;
+}
+
 function drawPlacedImages() {
   ictx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
   placedImages.forEach((item, idx) => {
@@ -892,6 +1053,9 @@ function drawPlacedImages() {
     if (currentTool === 'image' && idx === selectedImageIndex) {
       drawImageSelection(ictx, item);
     }
+  });
+  placedTexts.forEach((item, idx) => {
+    drawTextItem(ictx, item, currentTool === 'text' && idx === selectedTextIndex);
   });
 }
 
@@ -1182,6 +1346,7 @@ function saveHistory() {
     imgData,
     panels: JSON.parse(JSON.stringify(panels)),
     placedImages: JSON.parse(JSON.stringify(placedImages)),
+    placedTexts: JSON.parse(JSON.stringify(placedTexts)),
   });
   if (history.length > MAX_HISTORY) history.shift();
   historyIndex = history.length - 1;
@@ -1193,7 +1358,9 @@ function restoreHistoryState(snapshot) {
   dctx.putImageData(snapshot.imgData, 0, 0);
   panels = JSON.parse(JSON.stringify(snapshot.panels || []));
   placedImages = JSON.parse(JSON.stringify(snapshot.placedImages || []));
+  placedTexts = JSON.parse(JSON.stringify(snapshot.placedTexts || []));
   selectedImageIndex = -1;
+  selectedTextIndex = -1;
   selectedHandles = [];
   drawPlacedImages();
   drawPanels();
@@ -1260,6 +1427,10 @@ function removePanelSelection(pi) {
 function updateSelectionStatus() {
   const el = document.getElementById('st-sel');
   if (!el) return;
+  if (selectedTextIndex >= 0) {
+    el.textContent = '選択: 文字';
+    return;
+  }
   if (selectedImageIndex >= 0) {
     el.textContent = '選択: 画像';
     return;
@@ -1329,8 +1500,47 @@ panelCanvas.addEventListener('mousedown', e => {
   lastX = pos.x; lastY = pos.y;
   panelStart = { x: pos.x, y: pos.y };
 
+  if (currentTool === 'text') {
+    selectedHandles = [];
+    selectedImageIndex = -1;
+    const hitText = hitPlacedText(pos);
+    if (hitText >= 0) {
+      selectedTextIndex = hitText;
+      textDragStart = pos;
+      syncTextControlsFromSelection();
+      updateSelectionStatus();
+      drawPanels();
+      drawPlacedImages();
+      return;
+    }
+
+    const vals = getTextFormValues();
+    if (!normalizeTextContent(vals.text).trim()) {
+      selectedTextIndex = -1;
+      updateSelectionStatus();
+      drawPlacedImages();
+      return;
+    }
+
+    placedTexts.push({
+      text: vals.text,
+      x: pos.x,
+      y: pos.y,
+      fontSize: vals.fontSize,
+      vertical: vals.vertical,
+      color: vals.color,
+    });
+    selectedTextIndex = placedTexts.length - 1;
+    syncTextControlsFromSelection();
+    updateSelectionStatus();
+    drawPlacedImages();
+    saveHistory();
+    return;
+  }
+
   if (currentTool === 'image') {
     selectedHandles = [];
+    selectedTextIndex = -1;
     const handle = hitImageHandle(pos);
     if (handle) {
       imageDragMode = 'resize';
@@ -1360,6 +1570,7 @@ panelCanvas.addEventListener('mousedown', e => {
   }
 
   selectedImageIndex = -1;
+  selectedTextIndex = -1;
   drawPlacedImages();
 
   if (currentTool === 'panel') {
@@ -1437,6 +1648,21 @@ panelCanvas.addEventListener('mousemove', e => {
   const pos = getCanvasPos(e);
   document.getElementById('st-pos').textContent =
     `${(pos.x / getScale()).toFixed(1)}, ${(pos.y / getScale()).toFixed(1)} mm`;
+
+  if (currentTool === 'text') {
+    if (textDragStart && selectedTextIndex >= 0 && placedTexts[selectedTextIndex]) {
+      const item = placedTexts[selectedTextIndex];
+      const dx = pos.x - textDragStart.x;
+      const dy = pos.y - textDragStart.y;
+      item.x += dx;
+      item.y += dy;
+      textDragStart = pos;
+      drawPlacedImages();
+      return;
+    }
+    panelCanvas.style.cursor = hitPlacedText(pos) >= 0 ? 'move' : 'text';
+    return;
+  }
 
   if (currentTool === 'image') {
     if (imageDragMode && imageDragStart && selectedImageIndex >= 0 && placedImages[selectedImageIndex]) {
@@ -1540,6 +1766,13 @@ panelCanvas.addEventListener('mousemove', e => {
 });
 
 function endDraw(e) {
+  if (textDragStart) {
+    textDragStart = null;
+    saveHistory();
+    drawPlacedImages();
+    return;
+  }
+
   if (imageDragMode) {
     imageDragMode = null;
     imageResizeHandle = null;
@@ -1595,10 +1828,11 @@ const toolMap = {
   'tool-pencil': 'pencil',
   'tool-panel': 'panel',
   'tool-image': 'image',
+  'tool-text': 'text',
   'tool-line': 'line',
   'tool-eraser': 'eraser',
 };
-const toolNames = { pencil: 'ペン', panel: 'コマ枠', image: '画像', line: '直線', eraser: '消しゴム' };
+const toolNames = { pencil: 'ペン', panel: 'コマ枠', image: '画像', text: '文字', line: '直線', eraser: '消しゴム' };
 
 function setActiveTool(tool) {
   currentTool = tool;
@@ -1613,7 +1847,11 @@ function setActiveTool(tool) {
     imageResizeHandle = null;
     imageDragStart = null;
   }
-  panelCanvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'image' ? 'default' : 'crosshair';
+  if (tool !== 'text') {
+    selectedTextIndex = -1;
+    textDragStart = null;
+  }
+  panelCanvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'image' ? 'default' : tool === 'text' ? 'text' : 'crosshair';
   updateSelectionStatus();
   drawPlacedImages();
   drawPanels();
@@ -1742,6 +1980,12 @@ document.getElementById('btn-crop-cancel').addEventListener('click', closeCropMo
 document.getElementById('btn-crop-cancel-top').addEventListener('click', closeCropModal);
 document.getElementById('btn-crop-apply').addEventListener('click', placeCroppedImage);
 
+document.getElementById('btn-text-apply').addEventListener('click', () => {
+  if (applyTextFormToSelection()) {
+    document.getElementById('st-sel').textContent = '選択: 文字更新';
+  }
+});
+
 // ─── ZOOM ─────────────────────────────────────────────────
 function setZoom(z) {
   zoom = Math.max(0.25, Math.min(4.0, z));
@@ -1816,6 +2060,14 @@ document.addEventListener('keydown', e => {
 
   if (e.key === 'Backspace' || e.key === 'Delete') {
     e.preventDefault();
+    if (selectedTextIndex >= 0) {
+      placedTexts.splice(selectedTextIndex, 1);
+      selectedTextIndex = -1;
+      updateSelectionStatus();
+      drawPlacedImages();
+      saveHistory();
+      return;
+    }
     if (selectedImageIndex >= 0) {
       placedImages.splice(selectedImageIndex, 1);
       selectedImageIndex = -1;
@@ -1869,7 +2121,9 @@ document.getElementById('btn-clear').addEventListener('click', () => {
     dctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     panels = [];
     placedImages = [];
+    placedTexts = [];
     selectedImageIndex = -1;
+    selectedTextIndex = -1;
     drawPlacedImages();
     drawPanels();
     saveHistory();
@@ -1914,6 +2168,7 @@ history = [{
   imgData: dctx.getImageData(0, 0, drawCanvas.width, drawCanvas.height),
   panels: [],
   placedImages: [],
+  placedTexts: [],
 }];
 historyIndex = 0;
 updateHistoryUI();
